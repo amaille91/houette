@@ -1,0 +1,15 @@
+[Unit]
+Description=Foucl backend service
+After=network.target
+
+[Service]
+Type=simple
+User=${APP_USER}
+WorkingDirectory=${APP_ROOT}/foucl
+EnvironmentFile=${RUNTIME_ENV}
+ExecStart=${APP_ROOT}/foucl/foucl
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
