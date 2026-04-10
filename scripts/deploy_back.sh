@@ -30,10 +30,31 @@ if [ ! -f "$BACKEND_CONFIG_FILE" ]; then
   exit 1
 fi
 
+validate_backend_config() {
+  local config_file="$1"
+
+  if command -v jq >/dev/null 2>&1; then
+    if ! jq -er '.auth.bootstrapAdminUsername | strings | select(length > 0)' "$config_file" >/dev/null; then
+      echo "BACKEND_CONFIG_FILE is invalid: .auth.bootstrapAdminUsername must be a non-empty string (${config_file})" >&2
+      exit 1
+    fi
+    return 0
+  fi
+
+  if ! grep -Eq '"bootstrapAdminUsername"[[:space:]]*:[[:space:]]*"[^"]+"' "$config_file"; then
+    echo "BACKEND_CONFIG_FILE is invalid: .auth.bootstrapAdminUsername must be a non-empty string (${config_file})" >&2
+    echo "Tip: install jq for strict JSON validation." >&2
+    exit 1
+  fi
+}
+
 if [ -z "${VPS_HOST:-}" ] || [ -z "${APP_USER:-}" ] || [ -z "${APP_ROOT:-}" ]; then
   echo "VPS_HOST, APP_USER, and APP_ROOT are required in config" >&2
   exit 1
 fi
+
+echo "[deploy-back] Validating backend app-config.json"
+validate_backend_config "$BACKEND_CONFIG_FILE"
 
 FOUCL_DIR="${APP_ROOT%/}/foucl"
 
