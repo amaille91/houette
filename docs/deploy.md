@@ -1,82 +1,84 @@
 # Deployment Guide (Debian 12)
 
-This guide describes how to deploy the backend (`foucl2`) and frontend (`favs-frontend2`) to a single Debian 12 VPS using Nginx, systemd, and Let's Encrypt.
+This repo deploys the backend (`foucl2`) and frontend (`favs-frontend2`) to a single Debian 12 VPS using native PostgreSQL, Nginx, systemd, and Let's Encrypt.
 
-## Quick Start (One Command)
+## Quick Start
 
 ```bash
 make full-deploy CONFIG=/path/to/config.env
 ```
 
 The full pipeline does:
-1. Bootstrap (user, packages, directories, SSH key)
+1. Bootstrap the VPS user/directories/base packages
 2. Update local `~/.ssh/config`
-3. Sudoers setup (non-interactive deploy)
-4. Firewall (UFW)
-5. Runtime env upload
-6. systemd unit deploy
-7. Nginx config deploy (HTTP)
-8. TLS via Certbot
-9. Nginx config deploy (HTTPS)
-10. Frontend deploy
-11. Backend deploy
-12. Health checks
+3. Install deploy sudoers rules
+4. Configure UFW
+5. Install and start PostgreSQL
+6. Provision the foucl DB role and database
+7. Upload runtime env
+8. Install the `foucl` systemd unit
+9. Deploy Nginx (HTTP)
+10. Obtain TLS via Certbot
+11. Re-deploy Nginx (HTTPS)
+12. Deploy frontend assets
+13. Deploy backend binary, config, and SQL migration files
+14. Run health checks
 
 ## Required Configuration
 
-Create a local file (not committed) based on:
+Start from:
 
 ```bash
 cp deploy/config.env.example /path/to/config.env
 ```
 
 Important variables:
-- `ROOT_USER` (initial SSH user with sudo, usually `root`)
-- `APP_USER` (app runtime user, created by bootstrap)
-- `APP_ROOT` (absolute path, e.g. `/home/foucl/apps`)
-- `DOMAIN` and `ACME_EMAIL`
-- `LOCAL_FRONTEND_FILES` (local build dir with `index.html`)
-- `BACKEND_BINARY`, `BACKEND_CONFIG_FILE`
+- `ROOT_USER`, `APP_USER`, `VPS_HOST`, `APP_ROOT`
+- `DOMAIN`, `ACME_EMAIL`
 - `FOUCL_SESSION_SECRET`
+- `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`
+- `LOCAL_FRONTEND_FILES`
+- `BACKEND_BINARY`
+- `BACKEND_MIGRATIONS_DIR`
+- `BACKEND_CONFIG_FILE`
+- `FILES_BACKUP_DEST`
+- `POSTGRES_BACKUP_DEST`
 
-## Directory Layout on the VPS
+`foucl` reads database settings from `app-config.json`, not from `runtime.env`. The JSON config deployed to the VPS must therefore include a top-level `database` object plus Postgres backend selections for the domains you want to run on Postgres.
 
-```
+## VPS Layout
+
+```text
 APP_ROOT/
   foucl/
-    foucl                  # backend binary
+    foucl
     config/
-      app-config.json      # backend config (non-secret)
-      runtime.env          # secrets/env (generated from config.env)
-    data/                  # notes/checklists/agenda/session storage
-    static/                # frontend static assets
-    server.log             # backend logs
+      app-config.json
+      runtime.env
+    db/
+      migrations/
+        auth/
+        session/
+        calendar/
+        trip-sharing/
+        note/
+        checklist/
+    data/                  # retained for legacy filesystem import / rollback
   favs/
-    index.html             # copied from static bundle
-    static/                # frontend assets (index.js, css, bootstrap, icons)
+    index.html
+    static/
 ```
 
-## Core Scripts
+PostgreSQL data itself remains under Debian's native Postgres directories and is managed by `postgresql.service`.
 
-- `scripts/full_deploy.sh` – one command end-to-end pipeline
-- `scripts/bootstrap_vps.sh` – user + packages + directories + SSH key
-- `scripts/setup_sudoers.sh` – sudoers for non-interactive deploy
-- `scripts/setup_firewall.sh` – UFW config
-- `scripts/deploy_runtime_env.sh` – runtime env generation/upload
-- `scripts/deploy_systemd.sh` – systemd unit install + enable
-- `scripts/deploy_nginx.sh` – nginx config deploy with HTTP/HTTPS switch
-- `scripts/certbot_tls.sh` – cert issuance (idempotent)
-- `scripts/deploy_front.sh` – deploy static assets to `APP_ROOT/favs/static`
-- `scripts/deploy_back.sh` – deploy backend binary + config
-- `scripts/health_check.sh` – systemd + HTTPS checks
-
-## Manual / Individual Steps
+## Manual Steps
 
 ```bash
 make bootstrap CONFIG=/path/to/config.env
 make update-ssh-config CONFIG=/path/to/config.env
 make sudoers CONFIG=/path/to/config.env
 make firewall CONFIG=/path/to/config.env
+make deploy-postgres CONFIG=/path/to/config.env
 make deploy-runtime-env CONFIG=/path/to/config.env
 make deploy-systemd CONFIG=/path/to/config.env
 make deploy-nginx CONFIG=/path/to/config.env
@@ -87,12 +89,13 @@ make deploy-back CONFIG=/path/to/config.env
 make health-check CONFIG=/path/to/config.env
 ```
 
-## Notes and Choices
-- Nginx serves static files from `APP_ROOT/favs` with assets in `APP_ROOT/favs/static`.
-- SPA routes are handled by `try_files ... /index.html`.
-- Backend listens on `127.0.0.1:8081` and is proxied via `/api`.
-- Certbot runs non-interactively; HTTPS is activated after cert issuance.
-- SSH access uses keys; the app user has password disabled.
+## Runtime Behavior
+
+- `postgresql.service` is the database lifecycle owner. This repo installs it, enables it, and starts it through systemd.
+- `foucl.service` starts after `postgresql.service`.
+- `foucl` runs startup migrations automatically for all domains configured with backend `postgres`.
+- Startup hard-fails if Postgres is unreachable, if `psql` is missing, or if a migration fails.
+- `deploy-back` syncs `db/migrations` to the VPS because the backend reads SQL files from `./db/migrations/...` at runtime.
 
 ## Validation
 
@@ -100,8 +103,41 @@ make health-check CONFIG=/path/to/config.env
 make health-check CONFIG=/path/to/config.env
 ```
 
+Health checks verify:
+- `postgresql.service` is active
+- the configured DB credentials can run `SELECT 1`
+- `foucl.service` is active
+- frontend returns HTTP 200
+- `/api/note` returns HTTP 200 or 401
+
 ## Backups
 
+Filesystem backup of legacy `APP_ROOT/foucl/data`:
+
 ```bash
-make backup CONFIG=/path/to/config.env
+make backup-files CONFIG=/path/to/config.env
 ```
+
+PostgreSQL backup using `pg_dump`:
+
+```bash
+make backup-postgres CONFIG=/path/to/config.env
+```
+
+`make backup` remains as a legacy alias for `make backup-files`.
+
+## Restores
+
+Restore legacy filesystem snapshot:
+
+```bash
+make restore-files CONFIG=/path/to/config.env FILES_BACKUP_SOURCE=/path/to/files-backup
+```
+
+Restore PostgreSQL from a SQL dump:
+
+```bash
+make restore-postgres CONFIG=/path/to/config.env DUMP_FILE=/path/to/postgres.sql
+```
+
+Both restore flows stop `foucl` before writing data and start it again afterward if it was active before the restore.

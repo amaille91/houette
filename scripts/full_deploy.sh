@@ -23,6 +23,11 @@ validate_paths() {
     missing=1
   fi
 
+  if [ -z "${BACKEND_MIGRATIONS_DIR:-}" ] || [ ! -d "$BACKEND_MIGRATIONS_DIR" ]; then
+    echo "[full-deploy] BACKEND_MIGRATIONS_DIR missing or not a directory: ${BACKEND_MIGRATIONS_DIR:-<unset>}" >&2
+    missing=1
+  fi
+
   if [ -z "${BACKEND_CONFIG_FILE:-}" ] || [ ! -f "$BACKEND_CONFIG_FILE" ]; then
     echo "[full-deploy] BACKEND_CONFIG_FILE missing or not a file: ${BACKEND_CONFIG_FILE:-<unset>}" >&2
     missing=1
@@ -37,6 +42,13 @@ validate_paths() {
     echo "[full-deploy] Path validation failed" >&2
     exit 2
   fi
+
+  for var_name in POSTGRES_HOST POSTGRES_PORT POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD; do
+    if [ -z "${!var_name:-}" ]; then
+      echo "[full-deploy] ${var_name} is required in config" >&2
+      exit 2
+    fi
+  done
 }
 
 validate_paths
@@ -61,6 +73,9 @@ log_step "Configure sudoers"
 
 log_step "Configure firewall (UFW)"
 "$SCRIPT_DIR/setup_firewall.sh" "$CONFIG_FILE"
+
+log_step "Deploy PostgreSQL"
+"$SCRIPT_DIR/deploy_postgres.sh" "$CONFIG_FILE"
 
 log_step "Deploy runtime env"
 "$SCRIPT_DIR/deploy_runtime_env.sh" "$CONFIG_FILE"

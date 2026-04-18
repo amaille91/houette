@@ -94,6 +94,7 @@ sudo apt-get install -y nginx certbot python3-certbot-nginx rsync ufw
 echo "[bootstrap] Creating directories under ${APP_ROOT}"
 sudo mkdir -p "${APP_ROOT}/foucl/data"
 sudo mkdir -p "${APP_ROOT}/foucl/config"
+sudo mkdir -p "${APP_ROOT}/foucl/db"
 sudo mkdir -p "${APP_ROOT}/favs"
 
 echo "[bootstrap] Setting ownership"
